@@ -138,7 +138,7 @@ CREATE TABLE IF NOT EXISTS `char` (
 --
 
 CREATE TABLE IF NOT EXISTS `charlog` (
-  `time` datetime NOT NULL default '0000-00-00 00:00:00',
+  `time` varchar(19) NOT NULL DEFAULT '0000-00-00 00:00:00',
   `char_msg` varchar(255) NOT NULL default 'char select',
   `account_id` int(11) NOT NULL default '0',
   `char_num` tinyint(4) NOT NULL default '0',
@@ -400,7 +400,7 @@ CREATE TABLE IF NOT EXISTS `homunculus` (
 --
 
 CREATE TABLE IF NOT EXISTS `interlog` (
-  `time` datetime NOT NULL default '0000-00-00 00:00:00',
+  `time` varchar(19) NOT NULL DEFAULT '0000-00-00 00:00:00',
   `log` varchar(255) NOT NULL default ''
 ) ENGINE=MyISAM; 
 
@@ -435,8 +435,8 @@ CREATE TABLE IF NOT EXISTS `inventory` (
 
 CREATE TABLE IF NOT EXISTS `ipbanlist` (
   `list` varchar(255) NOT NULL default '',
-  `btime` datetime NOT NULL default '0000-00-00 00:00:00',
-  `rtime` datetime NOT NULL default '0000-00-00 00:00:00',
+  `btime` varchar(19) NOT NULL DEFAULT '0000-00-00 00:00:00',
+  `rtime` varchar(19) NOT NULL DEFAULT '0000-00-00 00:00:00',
   `reason` varchar(255) NOT NULL default '',
   KEY (`list`)
 ) ENGINE=MyISAM;
@@ -456,9 +456,9 @@ CREATE TABLE IF NOT EXISTS `login` (
   `unban_time` int(11) unsigned NOT NULL default '0',
   `expiration_time` int(11) unsigned NOT NULL default '0',
   `logincount` mediumint(9) unsigned NOT NULL default '0',
-  `lastlogin` datetime NOT NULL default '0000-00-00 00:00:00',
+  `lastlogin` varchar(19) NOT NULL DEFAULT '0000-00-00 00:00:00',
   `last_ip` varchar(100) NOT NULL default '',
-  `birthdate` DATE NOT NULL DEFAULT '0000-00-00',
+  `birthdate` varchar(10) NOT NULL default '0000-00-00',
   `character_slots` tinyint(3) unsigned NOT NULL default '0',
   `pincode` varchar(4) NOT NULL DEFAULT '',
   `pincode_change` int(11) unsigned NOT NULL DEFAULT '0',

@@ -367,4 +367,5 @@ ALTER TABLE `char` ADD COLUMN `faction_id` int(11) NOT NULL default '0' AFTER `e
 ALTER TABLE `cart_inventory` ADD COLUMN `favorite` tinyint(1) UNSIGNED NOT NULL default '0';
 ALTER TABLE `storage` ADD COLUMN `favorite` tinyint(1) UNSIGNED NOT NULL default '0';
 ALTER TABLE `rentstorage` ADD COLUMN `favorite` tinyint(1) UNSIGNED NOT NULL default '0';
+ALTER TABLE `rentstorage` ADD COLUMN `unique_id` bigint(20) unsigned NOT NULL default '0';
 ALTER TABLE `guild_storage` ADD COLUMN `favorite` tinyint(1) UNSIGNED NOT NULL default '0';

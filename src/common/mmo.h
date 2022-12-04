@@ -20,8 +20,8 @@
 // see conf/battle/client.conf for other version
 
 #ifndef PACKETVER
-	#define PACKETVER 20130807
-	//#define PACKETVER 20120410
+	//#define PACKETVER 20130807
+	#define PACKETVER 20120410
 #endif
 
 ///Remove/Comment this line to disable sc_data saving. [Skotlex]
@@ -1004,6 +1004,12 @@ enum bound_type {
 #endif
 #if MIN_STORAGE > MAX_STORAGE
 #error Config of MIN_STORAGE is invalid
+#endif
+
+#ifdef PACKET_OBFUSCATION
+	#if PACKETVER < 20110817
+	#error core.h::PACKET_OBFUSCATION is enabled, it requires PACKETVER 20110817 or newer
+	#endif
 #endif
 
 #endif /* _MMO_H_ */

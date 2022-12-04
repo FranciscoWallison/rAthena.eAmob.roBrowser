@@ -68,6 +68,11 @@ struct Clif_Config {
 
 struct s_packet_db packet_db[MAX_PACKET_VER + 1][MAX_PACKET_DB + 1];
 int packet_db_ack[MAX_PACKET_VER + 1][MAX_ACK_FUNC + 1];
+#ifdef PACKET_OBFUSCATION
+static struct s_packet_keys *packet_keys[MAX_PACKET_VER + 1];
+static unsigned int clif_cryptKey[3]; // Used keys
+#endif
+static unsigned short clif_parse_cmd(int fd, struct map_session_data *sd);
 
 /** Converts item type to display it on client if necessary.
 * @param nameid: Item ID
@@ -9933,7 +9938,8 @@ static int clif_guess_PacketVer(int fd, int get_previous, int *error)
 {
 	static int err = 1;
 	static int packet_ver = -1;
-	int cmd, packet_len, value; //Value is used to temporarily store account/char_id/sex
+	int packet_len, value; //Value is used to temporarily store account/char_id/sex
+	unsigned short cmd;
 
 	if (get_previous)
 	{//For quick reruns, since the normal code flow is to fetch this once to identify the packet version, then again in the wanttoconnect function. [Skotlex]
@@ -9945,8 +9951,9 @@ static int clif_guess_PacketVer(int fd, int get_previous, int *error)
 	//By default, start searching on the default one.
 	err = 1;
 	packet_ver = clif_config.packet_db_ver;
-	cmd = RFIFOW(fd,0);
+	cmd = clif_parse_cmd(fd, NULL);
 	packet_len = RFIFOREST(fd);
+	ShowError("packet_len: %d,  packet_ver: %d, cmd: %d \n", packet_len, packet_ver, cmd);
 
 #define SET_ERROR(n) \
 	if( err == 1 )\
@@ -10015,13 +10022,22 @@ void clif_parse_WantToConnection(int fd, struct map_session_data* sd)
 
 	// Only valid packet version get here
 	packet_ver = clif_guess_PacketVer(fd, 1, NULL);
-
+	
 	cmd = RFIFOW(fd,0);
 	account_id  = RFIFOL(fd, packet_db[packet_ver][cmd].pos[0]);
 	char_id     = RFIFOL(fd, packet_db[packet_ver][cmd].pos[1]);
 	login_id1   = RFIFOL(fd, packet_db[packet_ver][cmd].pos[2]);
 	client_tick = RFIFOL(fd, packet_db[packet_ver][cmd].pos[3]);
 	sex         = RFIFOB(fd, packet_db[packet_ver][cmd].pos[4]);
+	
+	ShowError(  "packet_ver: %d cmd: %d  account_id: %d  char_id: %d  login_id1: %d  client_tick: %d  sex: %d \n",
+	packet_ver,
+	cmd,
+	account_id ,
+	char_id    ,
+	login_id1  ,
+	client_tick,
+	sex        );
 
 	if( packet_ver < 5 || // reject really old client versions
 	    (packet_ver <= 9 && (battle_config.packet_ver_flag & 1) == 0) || // older than 6sept04
@@ -10065,6 +10081,9 @@ void clif_parse_WantToConnection(int fd, struct map_session_data* sd)
 	CREATE(sd, TBL_PC, 1);
 	sd->fd = fd;
 	sd->packet_ver = packet_ver;
+#ifdef PACKET_OBFUSCATION
+	sd->cryptKey = (((((clif_cryptKey[0] * clif_cryptKey[1]) + clif_cryptKey[2]) & 0xFFFFFFFF) * clif_cryptKey[1]) + clif_cryptKey[2]) & 0xFFFFFFFF;
+#endif
 	session[fd]->session_data = sd;
 
 	pc_setnewpc(sd, account_id, char_id, login_id1, client_tick, sex, fd);
@@ -18616,6 +18635,27 @@ void clif_crimson_marker(struct map_session_data *sd, struct block_list *bl, boo
 }
 
 /**
+ * Decrypt packet identifier for player
+ * @param fd
+ * @param sd
+ * @param packet_ver
+ * Orig author [Ind/Hercules]
+ **/
+static unsigned short clif_parse_cmd(int fd, struct map_session_data *sd) {
+#ifndef PACKET_OBFUSCATION
+	return RFIFOW(fd, 0);
+#else
+	unsigned short cmd = RFIFOW(fd,0); // Check if it is a player that tries to connect to the map server.
+ShowError("cmd: %d  sd: %d clif_parse_cmd: %d \n", cmd, sd , RFIFOW(fd, 0));
+	if (sd)
+		cmd = (cmd ^ ((sd->cryptKey >> 16) & 0x7FFF)); // Decrypt the current packet ID with the last key stored in the session.
+	else
+		cmd = (cmd ^ ((((clif_cryptKey[0] * clif_cryptKey[1]) + clif_cryptKey[2]) >> 16) & 0x7FFF)); // A player tries to connect - use the initial keys for the decryption of the packet ID.
+	return cmd; // Return the decrypted packet ID.
+#endif
+}
+
+/**
 * !TODO: Special item that obtained, must be broadcasted by this packet
 * 07fd ?? (ZC_BROADCASTING_SPECIAL_ITEM_OBTAIN)
 */
@@ -18702,7 +18742,7 @@ static int clif_parse(int fd)
 	if (RFIFOREST(fd) < 2)
 		return 0;
 
-	cmd = RFIFOW(fd,0);
+	cmd = clif_parse_cmd(fd, sd);
 
 	// identify client's packet version
 	if (sd) {
@@ -18737,7 +18777,7 @@ static int clif_parse(int fd)
 	}
 
 	// filter out invalid / unsupported packets
-	if (cmd > MAX_PACKET_DB || packet_db[packet_ver][cmd].len == 0) {
+	if (cmd > MAX_PACKET_DB || cmd < MIN_PACKET_DB || packet_db[packet_ver][cmd].len == 0) {
 		ShowWarning("clif_parse: Received unsupported packet (packet 0x%04x, %d bytes received), disconnecting session #%d.\n", cmd, RFIFOREST(fd), fd);
 #ifdef DUMP_INVALID_PACKET
 		ShowDump(RFIFOP(fd,0), RFIFOREST(fd));
@@ -18764,6 +18804,12 @@ static int clif_parse(int fd)
 	}
 	if ((int)RFIFOREST(fd) < packet_len)
 		return 0; // not enough data received to form the packet
+	
+#ifdef PACKET_OBFUSCATION
+	RFIFOW(fd, 0) = cmd;
+	if (sd)
+		sd->cryptKey = ((sd->cryptKey * clif_cryptKey[1]) + clif_cryptKey[2]) & 0xFFFFFFFF; // Update key for the next packet
+#endif
 
 	if( packet_db[packet_ver][cmd].func == clif_parse_debug )
 		packet_db[packet_ver][cmd].func(fd, sd);
@@ -18788,7 +18834,7 @@ static int clif_parse(int fd)
 /*==========================================
  * Reads packet_db.txt and setups its array reference
  *------------------------------------------*/
-void packetdb_readdb(void)
+void packetdb_readdb(bool reload)
 {
 	char line[1024];
 	int cmd,i,j;
@@ -18796,6 +18842,11 @@ void packetdb_readdb(void)
 	bool skip_ver = false;
 	int warned = 0;
 	int packet_ver = MAX_PACKET_VER;	// read into packet_db's version by default
+#ifdef PACKET_OBFUSCATION
+	bool key_defined = false;
+	int last_key_defined = -1;
+#endif
+
 	int packet_len_table[MAX_PACKET_DB] = {
 	   10,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
 	    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
@@ -19287,8 +19338,11 @@ void packetdb_readdb(void)
 	const char *filename[] = { "packet_db.txt", DBIMPORT"/packet_db.txt"};
 	int f;
 
-	// initialize packet_db[SERVER] from hardcoded packet_len_table[] values
+
 	memset(packet_db,0,sizeof(packet_db));
+	memset(packet_db_ack,0,sizeof(packet_db_ack));
+
+	// initialize packet_db[SERVER] from hardcoded packet_len_table[] values
 	for( i = 0; i < ARRAYLENGTH(packet_len_table); ++i )
 		packet_len(i) = packet_len_table[i];
 
@@ -19358,6 +19412,36 @@ void packetdb_readdb(void)
 						clif_config.packet_db_ver = cap_value(atoi(w2), 0, MAX_PACKET_VER);
 					continue;
 				}
+#ifdef PACKET_OBFUSCATION
+				else if (!reload && strcmpi(w1,"packet_keys") == 0) {
+					char key1[12] = { 0 }, key2[12] = { 0 }, key3[12] = { 0 };
+					trim(w2);
+					if (sscanf(w2, "%11[^,],%11[^,],%11[^ \r\n/]", key1, key2, key3) == 3) {
+						CREATE(packet_keys[packet_ver], struct s_packet_keys, 1);
+						packet_keys[packet_ver]->keys[0] = strtol(key1, NULL, 0);
+						packet_keys[packet_ver]->keys[1] = strtol(key2, NULL, 0);
+						packet_keys[packet_ver]->keys[2] = strtol(key3, NULL, 0);
+						last_key_defined = packet_ver;
+						if (battle_config.etc_log)
+							ShowInfo("Packet Ver:%d -> Keys: 0x%08X, 0x%08X, 0x%08X\n", packet_ver, packet_keys[packet_ver]->keys[0], packet_keys[packet_ver]->keys[1], packet_keys[packet_ver]->keys[2]);
+					}
+					continue;
+				} else if (!reload && strcmpi(w1,"packet_keys_use") == 0) {
+					char key1[12] = { 0 }, key2[12] = { 0 }, key3[12] = { 0 };
+					trim(w2);
+					if (strcmpi(w2,"default") == 0)
+						continue;
+					if (sscanf(w2, "%11[^,],%11[^,],%11[^ \r\n/]", key1, key2, key3) == 3) {
+						clif_cryptKey[0] = strtol(key1, NULL, 0);
+						clif_cryptKey[1] = strtol(key2, NULL, 0);
+						clif_cryptKey[2] = strtol(key3, NULL, 0);
+						key_defined = true;
+						if (battle_config.etc_log)
+							ShowInfo("Defined keys: 0x%08X, 0x%08X, 0x%08X\n", clif_cryptKey[0], clif_cryptKey[1], clif_cryptKey[2]);
+					}
+					continue;
+				}
+#endif
 			}
 
 			if( skip_ver )
@@ -19446,6 +19530,28 @@ void packetdb_readdb(void)
 		ShowStatus("Done reading '"CL_WHITE"%d"CL_RESET"' entries in '"CL_WHITE"%s"CL_RESET"'.\n", entries, line);
 	}
 	ShowStatus("Using default packet version: "CL_WHITE"%d"CL_RESET".\n", clif_config.packet_db_ver);
+	
+#ifdef PACKET_OBFUSCATION
+	if (!key_defined && !clif_cryptKey[0] && !clif_cryptKey[1] && !clif_cryptKey[2]) { // Not defined
+		int use_key = last_key_defined;
+
+		if (last_key_defined == -1)
+			ShowError("Can't find packet obfuscation keys!\n");
+		else {
+			if (packet_keys[clif_config.packet_db_ver])
+				use_key = clif_config.packet_db_ver;
+
+			ShowInfo("Using default packet obfuscation keys for packet_db_ver: %d\n", use_key);
+			memcpy(&clif_cryptKey, &packet_keys[use_key]->keys, sizeof(packet_keys[use_key]->keys));
+		}
+	}
+	ShowStatus("Packet Obfuscation: "CL_GREEN"Enabled"CL_RESET". Keys: "CL_WHITE"0x%08X, 0x%08X, 0x%08X"CL_RESET"\n", clif_cryptKey[0], clif_cryptKey[1], clif_cryptKey[2]);
+
+	for (i = 0; i < ARRAYLENGTH(packet_keys); i++) {
+		if (packet_keys[i])
+			aFree(packet_keys[i]);
+	}
+#endif
 }
 
 /*==========================================
@@ -19468,9 +19574,12 @@ void do_init_clif(void) {
 
 	clif_config.packet_db_ver = -1; // the main packet version of the DB
 	memset(clif_config.connect_cmd, 0, sizeof(clif_config.connect_cmd)); //The default connect command will be determined after reading the packet_db [Skotlex]
+#ifdef PACKET_OBFUSCATION
+	memset(clif_cryptKey, 0, sizeof(clif_cryptKey));
+#endif
 
 	//Using the packet_db file is the only way to set up packets now [Skotlex]
-	packetdb_readdb();
+	packetdb_readdb(false);
 
 	set_defaultparse(clif_parse);
 	if( make_listen_bind(bind_ip,map_port) == -1 ) {
